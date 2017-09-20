@@ -1,0 +1,152 @@
+﻿// GPU_NeighbourCalculator.compute
+// Primary Functionality:
+//      - To take input parameters and particle data from NBodyPlotter.cs
+//		- To calculate the number of neighbours a particle has in a given range
+//		- To save the count in each particle's [u] parameter (where the velocity 4 vector has components [vx,vy,vz,u]) 
+//		- To return the particle data to NBodyPlotter.cs
+//
+// Assignment Object: NBodyPlotter.cs within "Main Camera"
+// 
+// Notes: 
+//      This code is a modified version of the integratebodies.compute shader taken from the GPU GEMS artice found here: 
+//		Article:	https://developer.nvidia.com/gpugems/GPUGems3/gpugems3_ch31.html
+//		GitHub:		https://github.com/Scrawk/GPU-GEMS-NBody-Simulation
+//		The parralel computing code is exactly the same as I do not understand compute shader structure or language
+//		I have only changed some passed variables and the bodyBodyInteraction() function to suit the needs of this program
+//		Many of the comments are unchanged from Github
+
+#pragma kernel CSMain
+
+//NUM_THREADS must match the value of p in the NBodySim script
+#define NUM_THREADS 256
+
+#define SHARED_MEMORY_SIZE 256
+
+float _NeighbourRadius;
+uint _NumBodies;
+float4 _GroupDim, _ThreadDim;
+StructuredBuffer<float4> _ReadPos, _ReadVel;
+RWStructuredBuffer<float4> _WriteVel;
+
+groupshared float4 sharedPos[SHARED_MEMORY_SIZE];
+
+// This code was ported to direct compute from CUDA
+// In cuda the terms for groups and threads are a bit different
+// This is what I have changed, with the CUDA terms on the left
+// Note - the direct compute terms I have used may not be the offical terms
+// threadIdx = threadID
+// blockIdx = groupID
+// blockDim = threadDim
+// gridDim = groupDim
+
+// WRAP is used to force each block to start working on a different 
+// chunk (and wrap around back to the beginning of the array) so that
+// not all multiprocessors try to read the same memory locations at once.
+// Mod without divide, works on values from 0 up to 2m
+#define WRAP(x,m) (((x)<m)?(x):(x-m))  
+
+// Macros to simplify shared memory addressing
+#define SX(i) sharedPos[i+_ThreadDim.x*threadID.y]
+// This macro is only used when multithreadBodies is true (below)
+#define SX_SUM(i,j) sharedPos[i+_ThreadDim.x*j]
+
+float bodyBodyInteraction(float count, float4 bi, float4 bj) 
+{
+	float inRange1 = step(distance(bi,bj),_NeighbourRadius);
+	count += inRange1;
+    return count;
+}
+
+// This is the "tile_calculation" function from the GPUG3 article.
+float gravitation(float4 pos, float _r, uint3 threadID)
+{
+    uint i;
+
+    // Here we unroll the loop
+    for (i = 0; i < _ThreadDim.x; ) 
+    {
+        _r = bodyBodyInteraction(_r, SX(i), pos); i += 1;
+        _r = bodyBodyInteraction(_r, SX(i), pos); i += 1;
+        _r = bodyBodyInteraction(_r, SX(i), pos); i += 1;
+        _r = bodyBodyInteraction(_r, SX(i), pos); i += 1;
+    }
+
+    return _r;
+}
+
+float computeBodyForce(float4 pos, uint3 groupID, uint3 threadID)
+{
+    float dist = float(0.0);
+    
+    //In the GPU gems code multibodies are never used but the code is set up to use them.
+    //I have also included the code but how exactly they are to be used is unclear so its disabled here
+    bool multithreadBodies = false;
+    
+    uint p = _ThreadDim.x;
+    uint q = _ThreadDim.y;
+    uint n = _NumBodies;
+
+    uint start = n/q * threadID.y;
+    uint tile0 = start/(n/q);
+    uint tile = tile0;
+    uint finish = start + n/q;
+    
+    for (uint i = start; i < finish; i += p, tile++) 
+    {
+        sharedPos[threadID.x+_ThreadDim.x*threadID.y] = (multithreadBodies) ?
+        
+        _ReadPos[(WRAP(groupID.x+tile, _GroupDim.x) *_ThreadDim.y + threadID.y ) * _ThreadDim.x + threadID.x] :
+         
+        _ReadPos[WRAP(groupID.x+tile, _GroupDim.x) * _ThreadDim.x + threadID.x];
+        
+        GroupMemoryBarrierWithGroupSync();
+        // This is the "tile_calculation" function from the GPUG3 article.
+        dist = gravitation(pos, dist, threadID);
+        GroupMemoryBarrierWithGroupSync();
+    }
+    
+    // When the numBodies / thread block size is < # multiprocessors (16 on G80), the GPU is underutilized
+    // For example, with a 256 threads per block and 1024 bodies, there will only be 4 thread blocks, so the 
+    // GPU will only be 25% utilized.  To improve this, we use multiple threads per body.  We still can use 
+    // blocks of 256 threads, but they are arranged in q rows of p threads each.  Each thread processes 1/q
+    // of the forces that affect each body, and then 1/q of the threads (those with threadIdx.y==0) add up
+    // the partial sums from the other threads for that body.  To enable this, use the "--p=" and "--q=" 
+    // command line options to this example.  e.g.:
+    // "nbody.exe --n=1024 --p=64 --q=4" will use 4 threads per body and 256 threads per block. There will be
+    // n/p = 16 blocks, so a G80 GPU will be 100% utilized.
+
+    // We use a bool template parameter to specify when the number of threads per body is greater than one, 
+    // so that when it is not we don't have to execute the more complex code required!
+
+
+	return dist;
+
+}
+
+[numthreads(NUM_THREADS,1,1)]
+void CSMain (uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
+{
+
+	uint index = groupID.x * NUM_THREADS + threadID.x;
+	
+	float4 pos = _ReadPos[index];
+	float4 vel = _ReadVel[index];
+	
+	float r_ = computeBodyForce(pos, groupID, threadID);
+	vel.w = r_;
+ 
+	_WriteVel[index] = vel;
+   
+}
+
+
+
+
+
+
+
+
+
+
+
+

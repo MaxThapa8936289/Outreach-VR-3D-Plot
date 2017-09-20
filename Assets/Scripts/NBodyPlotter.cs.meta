@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: fa89b89d6f2d56f48a10f00ece93d800
+timeCreated: 1504616766
+licenseType: Free
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences:
+  - m_particleMat: {fileID: 2100000, guid: ac606c3f2c5a3b447ae62fea475f4eb7, type: 2}
+  - m_GPUNeighbourCalculator: {fileID: 7200000, guid: 3b749a9aae290fa4a95c6aff8ca28aaa,
+      type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
